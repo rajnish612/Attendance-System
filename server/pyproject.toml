@@ -1,0 +1,17 @@
+[project]
+name = "attendance-system"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cv>=1.0.0",
+    "fastapi[standard]>=0.136.1",
+    "insightface>=0.7.3",
+    "onnxruntime>=1.26.0",
+    "opencv-python>=4.13.0.92",
+    "pgvector>=0.4.2",
+    "psycopg2>=2.9.12",
+    "pyjwt>=2.9.0",
+    "sqlalchemy>=2.0.49",
+]
