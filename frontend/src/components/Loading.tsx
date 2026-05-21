@@ -1,4 +1,3 @@
-import React from 'react'
 import { useUiStore } from '../store/uiStore'
 
 export default function Loading() {
