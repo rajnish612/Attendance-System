@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./server
+    container_name: attendance-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./server/.env
+    restart: always
+
+  frontend:
+    build: ./frontend
+    container_name: attendance-frontend
+    ports:
+      - "3000:80"
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+    restart: always
