@@ -44,24 +44,25 @@ attendance_ai = AttendanceAI()
 Base.metadata.create_all(bind=engine)
 
 
-
 FACE_MATCH_THRESHOLD = 0.35
-
+IS_PROD = os.getenv("ENV") == "production"
 
 def set_auth_cookie(response: Response, token: str):
     response.set_cookie(
         key="access_token",
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite="none",
+        secure=IS_PROD,
         max_age=60 * 60,
         path="/",
     )
 
 
 def build_auth_payload(student: Student) -> dict:
-    token = create_access_token(student_id=student.studentId, full_name=student.fullName)
+    token = create_access_token(
+        student_id=student.studentId, full_name=student.fullName
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -99,14 +100,19 @@ async def register_student(
         raise HTTPException(status_code=400, detail="Only image files allowed")
 
     if not STUDENT_ID_PATTERN.match(studentId):
-        raise HTTPException(status_code=400, detail="Student ID must match STD-<number>, for example STD-001")
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID must match STD-<number>, for example STD-001",
+        )
 
     try:
         image_bytes = await image.read()
         embedding = attendance_ai.single_face_embedding_extraction(
             image_bytes=image_bytes
         )
-        existing_student = db.query(Student).filter(Student.studentId == studentId).first()
+        existing_student = (
+            db.query(Student).filter(Student.studentId == studentId).first()
+        )
 
         if existing_student:
             raise HTTPException(status_code=400, detail="Student already exists")
@@ -118,7 +124,10 @@ async def register_student(
 
         if result:
             matched_student, best_distance = result
-            if best_distance is not None and float(best_distance) <= FACE_MATCH_THRESHOLD:
+            if (
+                best_distance is not None
+                and float(best_distance) <= FACE_MATCH_THRESHOLD
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"This face is already registered to student {matched_student.studentId}",
@@ -183,7 +192,10 @@ async def register_teacher(
     db: Session = Depends(get_db),
 ):
     if not TEACHER_USERNAME_PATTERN.match(username):
-        raise HTTPException(status_code=400, detail="Teacher username must match TCH-<number>, for example TCH-001")
+        raise HTTPException(
+            status_code=400,
+            detail="Teacher username must match TCH-<number>, for example TCH-001",
+        )
 
     existing_teacher = db.query(Teacher).filter(Teacher.username == username).first()
 
@@ -209,7 +221,10 @@ async def login_teacher(
     db: Session = Depends(get_db),
 ):
     if not TEACHER_USERNAME_PATTERN.match(username):
-        raise HTTPException(status_code=400, detail="Teacher username must match TCH-<number>, for example TCH-001")
+        raise HTTPException(
+            status_code=400,
+            detail="Teacher username must match TCH-<number>, for example TCH-001",
+        )
 
     teacher = db.query(Teacher).filter(Teacher.username == username).first()
 
@@ -247,26 +262,47 @@ async def create_subject(
         raise HTTPException(status_code=404, detail="Teacher not found")
 
     # ensure teacher doesn't already have a subject with the same code
-    existing = db.query(Subject).filter(Subject.teacher_id == teacher.id, Subject.code == code).first()
+    existing = (
+        db.query(Subject)
+        .filter(Subject.teacher_id == teacher.id, Subject.code == code)
+        .first()
+    )
     if existing:
-        raise HTTPException(status_code=400, detail="Subject code already exists for this teacher")
+        raise HTTPException(
+            status_code=400, detail="Subject code already exists for this teacher"
+        )
 
     # total_classes starts at 0; it will be incremented when attendance is recorded
-    subject = Subject(code=code, name=name, description=description, teacher_id=teacher.id)
+    subject = Subject(
+        code=code, name=name, description=description, teacher_id=teacher.id
+    )
     db.add(subject)
     db.commit()
     db.refresh(subject)
 
-    return {"message": "Subject created", "subject": {"id": subject.id, "code": subject.code, "name": subject.name, "description": subject.description, "total_classes": subject.total_classes}}
+    return {
+        "message": "Subject created",
+        "subject": {
+            "id": subject.id,
+            "code": subject.code,
+            "name": subject.name,
+            "description": subject.description,
+            "total_classes": subject.total_classes,
+        },
+    }
 
 
 @app.delete("/teacher/subjects/{subject_id}")
-async def delete_subject(subject_id: int, request: Request, db: Session = Depends(get_db)):
+async def delete_subject(
+    subject_id: int, request: Request, db: Session = Depends(get_db)
+):
     token = extract_access_token(request)
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can delete sessions")
@@ -275,13 +311,19 @@ async def delete_subject(subject_id: int, request: Request, db: Session = Depend
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
 
-    subject = db.query(Subject).filter(Subject.id == subject_id, Subject.teacher_id == teacher.id).first()
+    subject = (
+        db.query(Subject)
+        .filter(Subject.id == subject_id, Subject.teacher_id == teacher.id)
+        .first()
+    )
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
     # delete enrollments and attendance records for this subject
     db.query(Enrollment).filter(Enrollment.subject_id == subject.id).delete()
-    db.query(AttendanceRecord).filter(AttendanceRecord.subject_id == subject.id).delete()
+    db.query(AttendanceRecord).filter(
+        AttendanceRecord.subject_id == subject.id
+    ).delete()
     db.delete(subject)
     db.commit()
 
@@ -294,10 +336,14 @@ async def list_teacher_subjects(request: Request, db: Session = Depends(get_db))
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can list their sessions")
+        raise HTTPException(
+            status_code=403, detail="Only teachers can list their sessions"
+        )
 
     teacher = db.query(Teacher).filter(Teacher.username == payload["sub"]).first()
 
@@ -308,8 +354,19 @@ async def list_teacher_subjects(request: Request, db: Session = Depends(get_db))
 
     result = []
     for s in subjects:
-        total_enrolled = db.query(Enrollment).filter(Enrollment.subject_id == s.id).count()
-        result.append({"id": s.id, "code": s.code, "name": s.name, "description": s.description, "total_enrolled": total_enrolled, "total_classes": s.total_classes})
+        total_enrolled = (
+            db.query(Enrollment).filter(Enrollment.subject_id == s.id).count()
+        )
+        result.append(
+            {
+                "id": s.id,
+                "code": s.code,
+                "name": s.name,
+                "description": s.description,
+                "total_enrolled": total_enrolled,
+                "total_classes": s.total_classes,
+            }
+        )
 
     return {"subjects": result}
 
@@ -321,14 +378,18 @@ async def list_subjects(request: Request, db: Session = Depends(get_db)):
         token = extract_access_token(request)
         payload = decode_access_token(token)
         if payload.get("role") == "student":
-            current_student = db.query(Student).filter(Student.studentId == payload["sub"]).first()
+            current_student = (
+                db.query(Student).filter(Student.studentId == payload["sub"]).first()
+            )
     except Exception:
         current_student = None
 
     subjects = db.query(Subject).all()
     result = []
     for s in subjects:
-        total_enrolled = db.query(Enrollment).filter(Enrollment.subject_id == s.id).count()
+        total_enrolled = (
+            db.query(Enrollment).filter(Enrollment.subject_id == s.id).count()
+        )
         teacher = db.query(Teacher).filter(Teacher.id == s.teacher_id).first()
         is_enrolled = False
         present_classes = 0
@@ -336,7 +397,10 @@ async def list_subjects(request: Request, db: Session = Depends(get_db)):
         if current_student:
             enrollment = (
                 db.query(Enrollment)
-                .filter(Enrollment.subject_id == s.id, Enrollment.student_id == current_student.id)
+                .filter(
+                    Enrollment.subject_id == s.id,
+                    Enrollment.student_id == current_student.id,
+                )
                 .first()
             )
             is_enrolled = enrollment is not None
@@ -351,28 +415,34 @@ async def list_subjects(request: Request, db: Session = Depends(get_db)):
                     .count()
                 )
 
-        result.append({
-            "id": s.id,
-            "code": s.code,
-            "name": s.name,
-            "description": s.description,
-            "teacher_username": teacher.username if teacher else None,
-            "teacher_full_name": teacher.fullName if teacher else None,
-            "total_enrolled": total_enrolled,
-            "total_classes": s.total_classes,
-            "is_enrolled": is_enrolled,
-            "present_classes": present_classes,
-        })
+        result.append(
+            {
+                "id": s.id,
+                "code": s.code,
+                "name": s.name,
+                "description": s.description,
+                "teacher_username": teacher.username if teacher else None,
+                "teacher_full_name": teacher.fullName if teacher else None,
+                "total_enrolled": total_enrolled,
+                "total_classes": s.total_classes,
+                "is_enrolled": is_enrolled,
+                "present_classes": present_classes,
+            }
+        )
     return {"subjects": result}
 
 
 @app.post("/subjects/{subject_id}/unenroll")
-async def unenroll_from_subject(subject_id: int, request: Request, db: Session = Depends(get_db)):
+async def unenroll_from_subject(
+    subject_id: int, request: Request, db: Session = Depends(get_db)
+):
     token = extract_access_token(request)
     payload = decode_access_token(token)
 
     if payload.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Only students can unenroll from subjects")
+        raise HTTPException(
+            status_code=403, detail="Only students can unenroll from subjects"
+        )
 
     student = db.query(Student).filter(Student.studentId == payload["sub"]).first()
 
@@ -381,29 +451,42 @@ async def unenroll_from_subject(subject_id: int, request: Request, db: Session =
 
     enrollment = (
         db.query(Enrollment)
-        .filter(Enrollment.subject_id == subject_id, Enrollment.student_id == student.id)
+        .filter(
+            Enrollment.subject_id == subject_id, Enrollment.student_id == student.id
+        )
         .first()
     )
 
     if not enrollment:
-        return {"message": "Not enrolled", "total_enrolled": db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()}
+        return {
+            "message": "Not enrolled",
+            "total_enrolled": db.query(Enrollment)
+            .filter(Enrollment.subject_id == subject_id)
+            .count(),
+        }
 
     db.delete(enrollment)
     db.commit()
 
     return {
         "message": "Unenrolled successfully",
-        "total_enrolled": db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count(),
+        "total_enrolled": db.query(Enrollment)
+        .filter(Enrollment.subject_id == subject_id)
+        .count(),
     }
 
 
 @app.post("/subjects/{subject_id}/enroll")
-async def enroll_in_subject(subject_id: int, request: Request, db: Session = Depends(get_db)):
+async def enroll_in_subject(
+    subject_id: int, request: Request, db: Session = Depends(get_db)
+):
     token = extract_access_token(request)
     payload = decode_access_token(token)
 
     if payload.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Only students can enroll in subjects")
+        raise HTTPException(
+            status_code=403, detail="Only students can enroll in subjects"
+        )
 
     student = db.query(Student).filter(Student.studentId == payload["sub"]).first()
 
@@ -415,9 +498,17 @@ async def enroll_in_subject(subject_id: int, request: Request, db: Session = Dep
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    existing = db.query(Enrollment).filter(Enrollment.subject_id == subject_id, Enrollment.student_id == student.id).first()
+    existing = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.subject_id == subject_id, Enrollment.student_id == student.id
+        )
+        .first()
+    )
     if existing:
-        total_enrolled = db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+        total_enrolled = (
+            db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+        )
         return {"message": "Already enrolled", "total_enrolled": total_enrolled}
 
     enrollment = Enrollment(subject_id=subject_id, student_id=student.id)
@@ -425,28 +516,38 @@ async def enroll_in_subject(subject_id: int, request: Request, db: Session = Dep
     db.commit()
     db.refresh(enrollment)
 
-    total_enrolled = db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+    total_enrolled = (
+        db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+    )
 
     return {"message": "Enrolled successfully", "total_enrolled": total_enrolled}
 
 
 @app.delete("/student/account")
-async def delete_student_account(response: Response, request: Request, db: Session = Depends(get_db)):
+async def delete_student_account(
+    response: Response, request: Request, db: Session = Depends(get_db)
+):
     token = extract_access_token(request)
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Only students can delete their account")
+        raise HTTPException(
+            status_code=403, detail="Only students can delete their account"
+        )
 
     student = db.query(Student).filter(Student.studentId == payload["sub"]).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     # delete attendance records and enrollments
-    db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student.id).delete()
+    db.query(AttendanceRecord).filter(
+        AttendanceRecord.student_id == student.id
+    ).delete()
     db.query(Enrollment).filter(Enrollment.student_id == student.id).delete()
     db.delete(student)
     db.commit()
@@ -458,15 +559,21 @@ async def delete_student_account(response: Response, request: Request, db: Sessi
 
 
 @app.delete("/teacher/account")
-async def delete_teacher_account(response: Response, request: Request, db: Session = Depends(get_db)):
+async def delete_teacher_account(
+    response: Response, request: Request, db: Session = Depends(get_db)
+):
     token = extract_access_token(request)
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can delete their account")
+        raise HTTPException(
+            status_code=403, detail="Only teachers can delete their account"
+        )
 
     teacher = db.query(Teacher).filter(Teacher.username == payload["sub"]).first()
     if not teacher:
@@ -476,7 +583,9 @@ async def delete_teacher_account(response: Response, request: Request, db: Sessi
     subjects = db.query(Subject).filter(Subject.teacher_id == teacher.id).all()
     for subject in subjects:
         db.query(Enrollment).filter(Enrollment.subject_id == subject.id).delete()
-        db.query(AttendanceRecord).filter(AttendanceRecord.subject_id == subject.id).delete()
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.subject_id == subject.id
+        ).delete()
         db.delete(subject)
 
     db.delete(teacher)
@@ -504,11 +613,7 @@ async def login_student_face(
         query_embedding = embedding.tolist()
 
         distance = Student.embedding.cosine_distance(query_embedding).label("distance")
-        statement = (
-            select(Student, distance)
-            .order_by(distance)
-            .limit(1)
-        )
+        statement = select(Student, distance).order_by(distance).limit(1)
         result = db.execute(statement).first()
 
         if not result:
@@ -601,7 +706,9 @@ async def take_attendance(
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can take attendance")
@@ -610,7 +717,11 @@ async def take_attendance(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
 
-    subject = db.query(Subject).filter(Subject.id == subject_id, Subject.teacher_id == teacher.id).first()
+    subject = (
+        db.query(Subject)
+        .filter(Subject.id == subject_id, Subject.teacher_id == teacher.id)
+        .first()
+    )
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
@@ -621,13 +732,17 @@ async def take_attendance(
         .all()
     )
     if not enrolled_students:
-        raise HTTPException(status_code=400, detail="No students enrolled in this subject")
+        raise HTTPException(
+            status_code=400, detail="No students enrolled in this subject"
+        )
 
     enrolled_student_ids = {student.id for student in enrolled_students}
 
     try:
         image_bytes = await image.read()
-        embeddings = attendance_ai.multiple_face_embedding_extraction(image_bytes=image_bytes)
+        embeddings = attendance_ai.multiple_face_embedding_extraction(
+            image_bytes=image_bytes
+        )
 
         matched_student_ids = set()
 
@@ -643,7 +758,9 @@ async def take_attendance(
                 if hasattr(query_embedding, "tolist"):
                     query_embedding = query_embedding.tolist()
 
-                distance = Student.embedding.cosine_distance(query_embedding).label("distance")
+                distance = Student.embedding.cosine_distance(query_embedding).label(
+                    "distance"
+                )
                 statement = select(Student, distance).order_by(distance).limit(1)
                 result = db.execute(statement).first()
 
@@ -700,7 +817,9 @@ async def take_attendance(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e) if str(e) else "unable to take attendance")
+        raise HTTPException(
+            status_code=500, detail=str(e) if str(e) else "unable to take attendance"
+        )
 
 
 @app.get("/teacher/subjects/{subject_id}/attendance-records")
@@ -713,20 +832,30 @@ async def get_attendance_records(
     try:
         payload = decode_access_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing authentication token"
+        )
 
     if payload.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can view attendance records")
+        raise HTTPException(
+            status_code=403, detail="Only teachers can view attendance records"
+        )
 
     teacher = db.query(Teacher).filter(Teacher.username == payload["sub"]).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
 
-    subject = db.query(Subject).filter(Subject.id == subject_id, Subject.teacher_id == teacher.id).first()
+    subject = (
+        db.query(Subject)
+        .filter(Subject.id == subject_id, Subject.teacher_id == teacher.id)
+        .first()
+    )
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    total_enrolled = db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+    total_enrolled = (
+        db.query(Enrollment).filter(Enrollment.subject_id == subject_id).count()
+    )
 
     rows = (
         db.query(AttendanceRecord, Student)
@@ -749,15 +878,29 @@ async def get_attendance_records(
     sessions = []
     for recorded_at, present_students in grouped.items():
         present_list = [student for student in present_students if student["present"]]
-        absent_list = [student for student in present_students if not student["present"]]
+        absent_list = [
+            student for student in present_students if not student["present"]
+        ]
         sessions.append(
             {
                 "recorded_at": recorded_at.isoformat() if recorded_at else None,
                 "present_count": len(present_list),
                 "absent_count": len(absent_list),
                 "total_enrolled": total_enrolled,
-                "present_students": [{"student_id": student["student_id"], "full_name": student["full_name"]} for student in present_list],
-                "absent_students": [{"student_id": student["student_id"], "full_name": student["full_name"]} for student in absent_list],
+                "present_students": [
+                    {
+                        "student_id": student["student_id"],
+                        "full_name": student["full_name"],
+                    }
+                    for student in present_list
+                ],
+                "absent_students": [
+                    {
+                        "student_id": student["student_id"],
+                        "full_name": student["full_name"],
+                    }
+                    for student in absent_list
+                ],
             }
         )
 
